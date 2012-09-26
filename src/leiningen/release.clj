@@ -47,8 +47,8 @@
         new-minor-version (str (inc (Integer/parseInt minor-version)) "-SNAPSHOT")]
     (string/join "." (conj version-parts new-minor-version))))
 
-(defn replace-project-version [old-vstring new-vstring]
-  (let [proj-file     (slurp "project.clj")
+(defn replace-project-version [project-file old-vstring new-vstring]
+  (let [proj-file     (slurp project-file)
         new-proj-file (.replaceAll proj-file (format "\\(defproject .+? %s" old-vstring) new-vstring )
         matcher       (.matcher
                        (Pattern/compile (format "(\\(defproject .+? )\"\\Q%s\\E\"" old-vstring))
@@ -57,8 +57,9 @@
       (raise "Error: unable to find version string %s in project.clj file!" old-vstring))
     (.replaceFirst matcher (format "%s\"%s\"" (.group matcher 1) new-vstring))))
 
-(defn set-project-version! [old-vstring new-vstring]
-  (spit "project.clj" (replace-project-version old-vstring new-vstring)))
+(defn set-project-version! [project-file old-vstring new-vstring]
+  (let []
+    (spit project-file (replace-project-version project-file old-vstring new-vstring))))
 
 (defn detect-deployment-strategy [project]
   (cond
@@ -104,22 +105,24 @@
           release-version  (.replaceAll current-version "-SNAPSHOT" "")
           next-dev-version (compute-next-development-version release-version)
           target-dir       (:target-path project (:target-dir project (:jar-dir project "."))) ; target-path for lein2, target-dir or jar-dir for lein1
-          jar-file-name    (format "%s/%s-%s.jar" target-dir (:name project) release-version)]
+          jar-file-name    (format "%s/%s-%s.jar" target-dir (:name project) release-version)
+          project-name     (:name project)
+          project-file     (str (:root project) "/project.clj")]
       (when (is-snapshot? current-version)
         (println (format "setting project version %s => %s" current-version release-version))
-        (set-project-version! current-version release-version)
+        (set-project-version! project-file current-version release-version)
         (println "adding, committing and tagging project.clj")
-        (scm! :add "project.clj")
-        (scm! :commit "-m" (format "lein-release plugin: preparing %s release" release-version))
-        (scm! :tag (format "%s-%s" (:name project) release-version)))
+        (scm! :add project-file)
+        (scm! :commit "-m" (format "lein-release plugin: preparing %s release of %s" release-version project-name))
+        ;; (scm! :tag (format "%s-%s" (:name project) release-version))
+        )
       (when-not (.exists (java.io.File. jar-file-name))
         (println "creating jar and pom files...")
         (sh! "lein" "jar")
         (sh! "lein" "pom"))
       (perform-deploy! project jar-file-name)
-      (when-not (is-snapshot? (extract-project-version-from-file))
+      (when-not (is-snapshot? (extract-project-version-from-file project-file))
         (println (format "updating version %s => %s for next dev cycle" release-version next-dev-version))
-        (set-project-version! release-version next-dev-version)
-        (scm! :add "project.clj")
-        (scm! :commit "-m" (format "lein-release plugin: bumped version from %s to %s for next development cycle" release-version next-dev-version))))))
-
+        (set-project-version! project-file release-version next-dev-version)
+        (scm! :add project-file)
+        (scm! :commit "-m" (format "lein-release plugin: bumped version from %s of %s to %s for next development cycle" release-version project-name next-dev-version))))))
